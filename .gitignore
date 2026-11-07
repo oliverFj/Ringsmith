@@ -1,0 +1,10 @@
+node_modules/
+/index.html
+/.design-studio/updates/
+/deliverables/
+/Discussions/
+/.codex/
+.env
+.env.*
+!.env.example
+*.log

@@ -1,0 +1,4 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <path fill="black" fill-rule="evenodd" d="M50 3 A47 47 0 1 1 49.999 3 Z M50 9 A41 41 0 1 0 50.001 9 Z"/>
+  <path fill="none" stroke="black" stroke-width="4" stroke-linejoin="round" d="M50 15 L70.57 78.32 L16.71 39.18 L83.29 39.18 L29.43 78.32 Z"/>
+</svg>
