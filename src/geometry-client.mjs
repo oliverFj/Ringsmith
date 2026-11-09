@@ -9,7 +9,8 @@ export function createGeometryClient(worker,wasm) {
     if(!started||active||failed)return;
     active=exports.shift()||pending;if(!active)return;
     if(active===pending)pending=null;
-    const {resolve,reject,...message}=active;worker.postMessage(message);
+    const {resolve,reject,onProgress,...message}=active;
+    onProgress?.('shape');worker.postMessage(message);
   }
   function fail(error) {
     failed=error;readyReject(error);active?.reject(error);pending?.reject(error);
@@ -19,18 +20,19 @@ export function createGeometryClient(worker,wasm) {
     if(data.kind==='ready'){started=true;readyResolve();pump();return;}
     if(!started&&data.error){fail(new Error(data.error));return;}
     if(data.id!==active?.id)return;
+    if(data.kind==='progress'){active.onProgress?.(data.stage);return;}
     const job=active;active=null;
     if(data.error)job.reject(new Error(data.error));else job.resolve(data.result);
     pump();
   };
   worker.onerror=()=>fail(new Error('3D-beregningen kunne ikke gennemføres. Genindlæs programmet.'));
   worker.postMessage({kind:'initialize',wasm});
-  const request=(kind,state,type)=>new Promise((resolve,reject)=>{
+  const request=(kind,state,type,onProgress)=>new Promise((resolve,reject)=>{
     if(failed){reject(failed);return;}
-    const job={id:++serial,kind,state:structuredClone(state),type,resolve,reject};
+    const job={id:++serial,kind,state:structuredClone(state),type,resolve,reject,onProgress};
     if(kind==='preview'){pending?.resolve(null);pending=job;}else exports.push(job);
-    pump();
+    onProgress?.(started?'queued':'initialize');pump();
   });
-  return {ready,preview:state=>request('preview',state),export:(state,type)=>request('export',state,type),
+  return {ready,preview:(state,onProgress)=>request('preview',state,undefined,onProgress),export:(state,type,onProgress)=>request('export',state,type,onProgress),
     cancelPreview(){pending?.resolve(null);pending=null;}};
 }

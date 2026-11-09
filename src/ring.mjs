@@ -19,8 +19,9 @@ export function profile(p, count = 128) {
     return [x, y];
   });
 }
-export function ringMesh(p, scale = 1, segments = 384, samples = 128) {
-  if (p?.type === 'signet') return signetMesh(p, scale, segments, samples);
+export function ringMesh(p, scale = 1, segments = 384, samples = 128, onProgress = () => {}) {
+  if (p?.type === 'signet') return signetMesh(p, scale, segments, samples, onProgress);
+  onProgress('shape');
   if (!validate(p) || !Number.isFinite(scale) || scale <= 0) throw new Error('Ugyldige ringmål.');
   const section = profile(p, samples), vertices = [], triangles = [];
   // Surface normals come from the profile's implicit superellipse, rather

@@ -15,6 +15,8 @@ export function createViewer(host) {
   const pmrem = new T.PMREMGenerator(renderer), room = new RoomEnvironment();
   const env = pmrem.fromScene(room); scene.environment = env.texture; room.dispose(); pmrem.dispose();
   const material = new T.MeshStandardMaterial({ color: 0xe8bd65, metalness: 1, roughness: 0.22 });
+  // The signet never uses the band's analytic normal shader.
+  const signetMaterial = material.clone();
   const bandEnabled={value:false},bandProfile={value:new T.Vector4()},bandFlatness={value:4};
   // Polished reflections expose interpolation errors even with exact vertex
   // normals. Evaluate the band's implicit profile per fragment; the signet
@@ -59,15 +61,21 @@ export function createViewer(host) {
   }
   return {
     update(mesh, frame = false, keepCreases = false, detail = null) {
+      ring.material=mesh.normalProfile?material:signetMaterial;
       bandEnabled.value=Boolean(mesh.normalProfile);
       if(mesh.normalProfile){bandProfile.value.fromArray(mesh.normalProfile);bandFlatness.value=mesh.normalProfile[4];}
-      let geometry = new T.BufferGeometry(); geometry.setAttribute('position', new T.Float32BufferAttribute(mesh.vertices.flat(), 3)); geometry.setIndex(mesh.triangles.flat());
+      const geometry = new T.BufferGeometry();
       if (keepCreases) {
-        const shaded=geometry.toNonIndexed();geometry.dispose();geometry=shaded;
-        geometry.setAttribute('normal',new T.BufferAttribute(creasedNormals(mesh.vertices,mesh.triangles),3));
+        const positions=new Float32Array(mesh.triangles.length*9);
+        for(let f=0;f<mesh.triangles.length;f++)for(let j=0;j<3;j++)positions.set(mesh.vertices[mesh.triangles[f][j]],f*9+j*3);
+        geometry.setAttribute('position',new T.BufferAttribute(positions,3));
+        geometry.setAttribute('normal',new T.BufferAttribute(mesh.normals??creasedNormals(mesh.vertices,mesh.triangles),3));
       }
-      else if(mesh.normals)geometry.setAttribute('normal',new T.BufferAttribute(mesh.normals,3));
-      else geometry.computeVertexNormals();
+      else {
+        geometry.setAttribute('position',new T.Float32BufferAttribute(mesh.vertices.flat(),3));geometry.setIndex(mesh.triangles.flat());
+        if(mesh.normals)geometry.setAttribute('normal',new T.BufferAttribute(mesh.normals,3));
+        else geometry.computeVertexNormals();
+      }
       // Slightly shade the flat detail surface so shallow gold-on-gold work
       // remains legible under the environment light. Export geometry is untouched.
       if(detail) {
@@ -78,7 +86,7 @@ export function createViewer(host) {
         }
         geometry.setAttribute('color',new T.BufferAttribute(colors,3));
       }
-      if(material.vertexColors!==Boolean(detail)){material.vertexColors=Boolean(detail);material.needsUpdate=true;}
+      if(signetMaterial.vertexColors!==Boolean(detail)){signetMaterial.vertexColors=Boolean(detail);signetMaterial.needsUpdate=true;}
       geometry.computeBoundingBox(); geometry.boundingBox.getCenter(modelCenter);
       const size = geometry.boundingBox.getSize(new T.Vector3()); modelSize = Math.max(size.x, size.y, size.z);
       controls.minDistance = modelSize*0.8; controls.maxDistance = modelSize*6;

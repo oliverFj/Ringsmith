@@ -25,7 +25,8 @@ export function applyMotif(body,p,H,solids) {
     if(section.isEmpty())throw new Error('Motivet har ingen udfyldt flade.');
     const relief=m.mode==='relief';
     const raised=section.extrude(m.depth+.04);solids.push(raised);
-    const tool=raised.translate([0,0,relief?H-.04:H-m.depth]);solids.push(tool);
+    const shaded=raised.calculateNormals(0,60);solids.push(shaded);
+    const tool=shaded.translate([0,0,relief?H-.04:H-m.depth]);solids.push(tool);
     const result=relief?body.add(tool):body.subtract(tool);solids.push(result);
     return result;
   } finally {section?.delete();}

@@ -12,6 +12,7 @@ import {createParameterField} from './parameter-field.mjs';
 import { createViewer } from './viewer.mjs';
 import { createMotifPanel } from './motif-panel.mjs';
 import { validateMotif } from './motif.mjs';
+import { createWeightPanel } from './weight-panel.mjs';
 const root = document.querySelector('#app');
 root.dataset.layout = 'fluid';
 root.innerHTML = `<header class="topbar"><div class="identity"><span class="mark" aria-hidden="true">◎</span><div><h1>Ringsmith</h1><p>Et lille værksted til præcise ringe</p></div></div><div id="file-actions" class="actions"></div></header>
@@ -25,6 +26,27 @@ let formValid=true,geometryValid=false,exportBusy=false,previewRevision=0,reques
 const exportButtons = [];
 const fmt = (n, digits = 2) => n.toLocaleString('da-DK', { minimumFractionDigits: digits, maximumFractionDigits: digits });
 const $ = id => document.getElementById(id);
+const weightPanel=createWeightPanel(theme);$('export-actions').before(weightPanel.node);
+const calculation=document.createElement('div');
+calculation.className='calculation-status';calculation.hidden=true;
+calculation.setAttribute('role','status');calculation.setAttribute('aria-live','polite');
+calculation.setAttribute('aria-atomic','true');
+const activity=component(theme,'spinner',{label:'Forbereder beregning…',announce:false,variant:'small'});
+const viewerFrame=document.createElement('div');viewerFrame.className='viewer-frame';
+$('viewer').before(viewerFrame);viewerFrame.append($('viewer'),calculation);
+calculation.append(activity);
+let previewStage=null,exportStage=null;
+const phaseLabels={initialize:'Starter beregningsværktøjet…',queued:'Venter på den igangværende beregning…',
+  shape:'Beregner ringens grundform…',reuse:'Genbruger ringens grundform…',hollow:'Danner fingerhul, baner og udhuling…',
+  'outer-edge':'Afrunder den ydre åbningskant…','inner-edge':'Afrunder kanter mod baner og hulrum…',
+  motif:'Beregner motiv og samler overflader…',surface:'Samler ringens overflader…',
+  validate:'Kontrollerer, at ringen hænger sammen…',normals:'Udglatter overfladens normals…',
+  serialize:'Pakker eksportfilen…'};
+function showCalculation() {
+  const phase=exportBusy?exportStage:previewStage;
+  calculation.hidden=!phase;
+  activity.querySelector('.ds-spinner__label').textContent=phase?(exportBusy?'Eksport · ':'')+phaseLabels[phase]:'';
+}
 const notify = text => { $('status').textContent = text; };
 function button(host, text, action, primary = false) {
   const el = component(theme, 'button', { text, variant: primary ? 'primary' : 'secondary' });
@@ -37,6 +59,8 @@ function setValidity(valid) {
 }
 const readInputs=()=>Object.fromEntries(Object.entries(inputs).map(([key,input])=>[key,parameterControl(state.type,key).read(input.valueAsNumber,state[key])]));
 function invalidatePreview() {
+  weightPanel.setVolume(null);
+  previewStage=null;showCalculation();
   ++previewRevision;requestedKey=null;geometryValid=false;geometry.cancelPreview();
   $('viewer').setAttribute('aria-busy','false');$('volume').textContent='—';$('viewer-help').textContent='Kontrollér målene for at opdatere modellen.';
 }
@@ -92,8 +116,8 @@ function renderFields() {
     field('hollow', 'hollowWall', 'Gods ved udhuling · mm', 'Tykkelse under fladens midte og vægafstand i skuldrene.');
     field('hollow', 'channelReach', 'Banernes længde · %', '0 % er kortest · 100 % går længst ned mod bunden.');
     field('shoulders', 'shoulderFullness', 'Skuldrenes fylde · %', '0 % er slankest · 100 % er fyldigst.');
-    field('shoulders', 'innerRounding', 'Indvendig runding · mm', 'Løft mod ringskinnens kanter; højst 45 % af tykkelsen nederst.');
-    field('shoulders', 'innerBlend', 'Afrunding ved åbningen · %', '0 % er skarp · 100 % er blødest. Gælder kanten mellem fingerhullet og hulrummet.');
+    field('shoulders', 'innerRounding', 'Ydre åbningskant · mm', 'Afrunder kanten hele vejen rundt om fingerhullet. Begrænses lokalt af godstykkelsen.');
+    field('shoulders', 'innerBlend', 'Kant mod baner og hulrum · %', 'Afrunder overgangen fra fingerhullet til begge baner og udhulingen. 0 % er skarp.');
   } else {
     field('shape', 'flatness', 'Ydersidens fladhed · %', '0 % er rundest · 100 % er fladest.');
     field('shape', 'comfort', 'Indersidens runding · %', '0 % er svagest · 100 % er kraftigst.');
@@ -105,10 +129,10 @@ button('file-actions', 'Åbn design', async () => {
   try {
     const opened = await project.open();
     if (!opened || (dirty && !confirm('Erstat det aktuelle design med filens indhold?'))) return;
-    const converted = opened.data.type === 'signet' && opened.data.geometryVersion !== 2;
+    const converted = opened.data.type === 'signet' && opened.data.geometryVersion !== 3;
     state = opened.data.type === 'signet' ? normalizeSignet(opened.data) : { ...opened.data, type: 'band' };
     designs[state.type] = state; dirty = converted; sync();
-    notify(converted ? 'Ældre signetdesign åbnet med den nye runde form og udhuling. Gem som en ny designfil.' : 'Designet er åbnet.');
+    notify(converted ? 'Ældre signetdesign åbnet med cylindrisk fingerhul og lokal kantafrunding. Kontrollér afrundingen og gem som en ny designfil.' : 'Designet er åbnet.');
   } catch (e) { notify(e.message); }
 });
 const saveButton = button('file-actions', 'Gem design', () => {
@@ -119,14 +143,14 @@ const insideButton = button('view-actions', 'Se inderside', () => viewer?.inside
 const frontButton = button('view-actions', 'Se forfra', () => viewer?.front()); frontButton.id = 'front-view';
 const topButton = button('view-actions', 'Se flade', () => viewer?.top()); topButton.id = 'top-view';
 for (const type of ['3mf', 'obj']) exportButtons.push(button('export-actions', `Eksportér .${type}`, async () => {
-  const snapshot=structuredClone(state);exportBusy=true;setValidity(formValid);notify(`Forbereder .${type}-fil…`);
+  const snapshot=structuredClone(state);exportBusy=true;exportStage='queued';showCalculation();setValidity(formValid);notify(`Forbereder .${type}-fil…`);
   try {
-    const data = await geometry.export(snapshot,type);
+    const data = await geometry.export(snapshot,type,phase=>{exportStage=phase;showCalculation();});
     const name = snapshot.type === 'signet' ? 'signetring' : 'ring';
     downloadFile(`${name}-${snapshot.diameter}mm-plus-${snapshot.allowance}pct.${type}`, data, type === '3mf' ? 'model/3mf' : 'text/plain');
     notify(`.${type}-fil sendt til downloads med ${fmt(snapshot.allowance, 1)} % tillæg.`);
   } catch (e) { notify('Eksport mislykkedes: ' + e.message); }
-  finally{exportBusy=false;setValidity(formValid);}
+  finally{exportBusy=false;exportStage=null;showCalculation();setValidity(formValid);}
 }, type === '3mf'));
 try { viewer = createViewer($('viewer')); } catch (e) { $('viewer').innerHTML = '<p class="viewer-error">3D-visningen kræver WebGL. Tværsnittet og eksporten fungerer stadig.</p>'; }
 function sync() { typeSelect.value = state.type; renderFields(); motifValid=true; motifPanel.render(); setValidity(true); update(); }
@@ -152,17 +176,25 @@ function update() {
   invalidatePreview();requestedKey=key;
   const revision=previewRevision,snapshot=state;
   $('volume').textContent='Beregner…';$('viewer').setAttribute('aria-busy','true');setValidity(formValid);
+  weightPanel.setVolume(null,'Beregner ringens volumen…');
   $('viewer-help').textContent='Opdaterer modellen… Du kan fortsætte med at ændre målene.';
-  geometry.preview(snapshot).then(result=>{
+  geometry.preview(snapshot,phase=>{
+    if(revision!==previewRevision)return;
+    previewStage=phase;showCalculation();
+  }).then(result=>{
     if(!result||revision!==previewRevision)return;
     const detail=signet&&snapshot.motif?{mode:snapshot.motif.mode,z:snapshot.diameter+snapshot.thickness+snapshot.headThickness+(snapshot.motif.mode==='relief'?snapshot.motif.depth:-snapshot.motif.depth)}:null;
     viewer?.update(result.mesh,lastType!==snapshot.type,signet,detail);lastType=snapshot.type;
+    previewStage=null;showCalculation();
     $('volume').textContent=fmt(result.volume,1)+' mm³';$('viewer').setAttribute('aria-busy','false');
+    weightPanel.setVolume(result.volume);
     $('viewer-help').textContent='Træk for at dreje · Rul for at zoome';
     geometryValid=true;setValidity(formValid);notify('3D-modellen er opdateret.');
   }).catch(error=>{
     if(revision!==previewRevision)return;
+    previewStage=null;showCalculation();
     requestedKey=null;$('volume').textContent='—';$('viewer').setAttribute('aria-busy','false');setValidity(false);notify(error.message);
+    weightPanel.setVolume(null);
     $('viewer-help').textContent='Kontrollér målene for at opdatere modellen.';
   });
 }

@@ -1,27 +1,45 @@
-// Angle weights make the reflection independent of how a boolean happens to
-// triangulate a surface. Use shared mesh indices, never a spatial hash that
-// merges nearby (but distinct) points on a small roundover.
+// Smooth connected corners across non-sharp edges. Every corner in a group
+// gets the same angle-weighted normal, independent of its own face direction.
+// No positional welding: nearby surfaces and actual hard edges stay separate.
 export function creasedNormals(vertices,triangles,crease=Math.PI/3) {
-  const faces=[],incident=Array.from({length:vertices.length},()=>[]);
+  const count=triangles.length*3,parent=new Int32Array(count),faceNormals=new Float64Array(count),angles=new Float64Array(count);
+  for(let i=0;i<count;i++)parent[i]=i;
+  const root=i=>{while(parent[i]!==i){parent[i]=parent[parent[i]];i=parent[i];}return i;};
+  const join=(a,b)=>{a=root(a);b=root(b);if(a!==b)parent[b]=a;};
   for(let f=0;f<triangles.length;f++) {
-    const t=triangles[f],[a,b,c]=t.map(i=>vertices[i]);
-    const u=b.map((v,i)=>v-a[i]),v=c.map((n,i)=>n-a[i]);
-    const cross=[u[1]*v[2]-u[2]*v[1],u[2]*v[0]-u[0]*v[2],u[0]*v[1]-u[1]*v[0]];
-    const length=Math.hypot(...cross),normal=cross.map(n=>n/(length||1));faces.push(normal);
+    const t=triangles[f],a=vertices[t[0]],b=vertices[t[1]],c=vertices[t[2]];
+    const ux=b[0]-a[0],uy=b[1]-a[1],uz=b[2]-a[2],vx=c[0]-a[0],vy=c[1]-a[1],vz=c[2]-a[2];
+    const nx=uy*vz-uz*vy,ny=uz*vx-ux*vz,nz=ux*vy-uy*vx,length=Math.hypot(nx,ny,nz);
+    faceNormals.set([nx/(length||1),ny/(length||1),nz/(length||1)],f*3);
     for(let j=0;j<3;j++) {
       const p=vertices[t[j]],q=vertices[t[(j+1)%3]],r=vertices[t[(j+2)%3]];
-      const e=q.map((n,i)=>n-p[i]),d=r.map((n,i)=>n-p[i]);
-      const angle=Math.acos(Math.max(-1,Math.min(1,e.reduce((s,n,i)=>s+n*d[i],0)/(Math.hypot(...e)*Math.hypot(...d)))));
-      incident[t[j]].push({normal,angle});
+      const ex=q[0]-p[0],ey=q[1]-p[1],ez=q[2]-p[2],dx=r[0]-p[0],dy=r[1]-p[1],dz=r[2]-p[2];
+      // atan2 remains stable for the very thin triangles left by boolean cuts.
+      angles[f*3+j]=Math.atan2(length,ex*dx+ey*dy+ez*dz);
     }
   }
-  const result=new Float32Array(triangles.length*9),cos=Math.cos(crease);
-  for(let f=0;f<triangles.length;f++)for(let j=0;j<3;j++) {
-    const sum=[0,0,0],face=faces[f];
-    for(const {normal,angle} of incident[triangles[f][j]])if(normal.reduce((s,n,i)=>s+n*face[i],0)>cos) {
-      for(let k=0;k<3;k++)sum[k]+=normal[k]*angle;
+  const edges=new Map(),cos=Math.cos(crease),stride=vertices.length;
+  const next=c=>c-c%3+(c%3+1)%3;
+  for(let c=0;c<count;c++) {
+    const f=Math.floor(c/3),a=triangles[f][c%3],b=triangles[f][(c%3+1)%3];
+    const key=Math.min(a,b)*stride+Math.max(a,b),previous=edges.get(key);
+    if(previous===undefined){edges.set(key,c);continue;}
+    const other=Math.floor(previous/3)*3,k=f*3;
+    if(faceNormals[k]*faceNormals[other]+faceNormals[k+1]*faceNormals[other+1]+faceNormals[k+2]*faceNormals[other+2]>cos) {
+      const same=triangles[Math.floor(previous/3)][previous%3]===a;
+      join(c,same?previous:next(previous));join(next(c),same?next(previous):previous);
     }
-    const length=Math.hypot(...sum)||1;result.set(sum.map(n=>n/length),f*9+j*3);
+    edges.delete(key);
+  }
+  const sums=new Float64Array(count*3);
+  for(let c=0;c<count;c++) {
+    const r=root(c)*3,f=c-c%3,w=angles[c];
+    sums[r]+=faceNormals[f]*w;sums[r+1]+=faceNormals[f+1]*w;sums[r+2]+=faceNormals[f+2]*w;
+  }
+  const result=new Float32Array(count*3);
+  for(let c=0;c<count;c++) {
+    const r=root(c)*3,length=Math.hypot(sums[r],sums[r+1],sums[r+2])||1;
+    result[c*3]=sums[r]/length;result[c*3+1]=sums[r+1]/length;result[c*3+2]=sums[r+2]/length;
   }
   return result;
 }

@@ -4,10 +4,26 @@ import {unzipSync,strFromU8} from 'fflate';
 import {OBJLoader} from 'three/addons/loaders/OBJLoader.js';
 import {createProjectFile} from '../design/runtime/files.mjs';
 import {ringMesh,validate,volume,presets} from '../src/ring.mjs';
-import {signetDefaults as defaults,normalizeSignet} from '../src/signet.mjs';
+import {signetDefaults as defaults,normalizeSignet,clearSignetCache} from '../src/signet.mjs';
 import {initializeSolid,solidAPI} from '../src/solid.mjs';
 import {toOBJ,to3MF} from '../src/export.mjs';
 await initializeSolid();
+
+test('Motif edits reuse a pristine blank; shape and resolution changes invalidate it',()=>{
+  clearSignetCache();
+  const motif={version:1,source:'svg',name:'cache.svg',contours:[[[-.5,-.5],[.5,-.5],[.5,.5],[-.5,.5]]],mode:'engrave',size:5,depth:.2,rotation:0,offsetX:0,offsetY:0};
+  const make=(p,samples=80)=>{const phases=[];const mesh=ringMesh(p,1,192,samples,phase=>phases.push(phase));return {mesh,phases};};
+  make({...defaults,motif});
+  const edited={...defaults,motif:{...motif,rotation:25,depth:.1}};
+  const warm=make(edited);assert.equal(warm.phases[0],'reuse');
+  const removed=make(defaults);assert.equal(removed.phases[0],'reuse');
+  assert.equal(make({...defaults,width:4}).phases[0],'shape');
+  assert.equal(make(defaults,96).phases[0],'shape');
+  clearSignetCache();
+  assert.deepEqual(make(edited).mesh,warm.mesh,'Motif operations never accumulate in the cached blank');
+  assert.deepEqual(make(defaults).mesh,removed.mesh,'Removing a motif restores the original ring exactly');
+  clearSignetCache();
+});
 function inspect(p) {
   const mesh=ringMesh(p,1,96,80),edges=new Map();
   for(const t of mesh.triangles) {

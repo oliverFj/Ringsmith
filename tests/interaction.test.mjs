@@ -26,8 +26,22 @@ function setup() {
   const messages=[],worker={postMessage:job=>messages.push(job)};
   const client=createGeometryClient(worker,new Uint8Array());
   worker.onmessage({data:{kind:'ready'}});
-  return {client,messages,reply:(job,result)=>worker.onmessage({data:{id:job.id,result}})};
+  return {client,messages,reply:(job,result)=>worker.onmessage({data:{id:job.id,result}}),
+    progress:(job,stage)=>worker.onmessage({data:{id:job.id,kind:'progress',stage}})};
 }
+
+test('Progress keeps its job active and queued previews cannot complete it',async()=>{
+  const {client,messages,reply,progress}=setup(),phases=[];
+  const first=client.preview({diameter:16},stage=>phases.push(stage));
+  const second=client.preview({diameter:17});
+  progress(messages[1],'hollow');progress({id:999},'motif');
+  assert.equal(messages.length,2,'Progress does not start the queued preview');
+  assert.equal('onProgress' in messages[1],false,'Functions are never posted to the worker');
+  reply(messages[1],{volume:1});assert.deepEqual(await first,{volume:1});
+  progress(messages[1],'validate');
+  reply(messages[2],{volume:2});await second;
+  assert.deepEqual(phases,['queued','shape','hollow']);
+});
 test('Rapid changes keep only the newest waiting preview and do not mutate submitted snapshots',async()=>{
   const {client,messages,reply}=setup(),state={diameter:16.2};
   const first=client.preview(state);state.diameter=17;
